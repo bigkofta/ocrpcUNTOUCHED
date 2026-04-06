@@ -131,6 +131,120 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
+async function getModalCoords(tabId) {
+    const modalRect = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: async () => {
+            const isSlipReady = (node) => {
+                if (!node) return false;
+                const text = (node.innerText || '').trim();
+                if (text.length < 120) return false;
+                const hasOdds = /Odds/i.test(text);
+                const hasStake = /Stake/i.test(text);
+                const hasPayout = /Est\.?\s*Payout|Payout|Return/i.test(text);
+                const noLoading = !/loading|please wait|placing bet/i.test(text);
+                const rect = node.getBoundingClientRect();
+                return rect.width >= 320 && rect.height >= 260 && hasOdds && hasStake && hasPayout && noLoading;
+            };
+
+            const rectIsStable = async (node) => {
+                const r1 = node.getBoundingClientRect();
+                await new Promise(r => setTimeout(r, 120));
+                const r2 = node.getBoundingClientRect();
+                return Math.abs(r1.x - r2.x) < 3 &&
+                    Math.abs(r1.y - r2.y) < 3 &&
+                    Math.abs(r1.width - r2.width) < 4 &&
+                    Math.abs(r1.height - r2.height) < 4;
+            };
+
+            const findSlipContainer = () => {
+                const modalBet = document.querySelector('[data-testid="modal-bet"]');
+                if (modalBet) {
+                    const cardCandidates = Array.from(modalBet.querySelectorAll('div'))
+                        .map((node) => {
+                            const rect = node.getBoundingClientRect();
+                            const text = (node.innerText || '').trim();
+                            const className = typeof node.className === 'string' ? node.className : '';
+                            return { node, rect, text, className };
+                        })
+                        .filter(({ rect, text, className }) =>
+                            rect.width >= 420 &&
+                            rect.width <= 760 &&
+                            rect.height >= 360 &&
+                            text.length > 120 &&
+                            /Odds/i.test(text) &&
+                            /Stake/i.test(text) &&
+                            /rounded|overflow-hidden|bg-grey/i.test(className)
+                        )
+                        // Pick the OUTER slip card, not inner market panels
+                        .sort((a, b) => (b.rect.width * b.rect.height) - (a.rect.width * a.rect.height));
+
+                    if (cardCandidates.length > 0) {
+                        return cardCandidates[0].node;
+                    }
+                }
+
+                const selectors = [
+                    '[data-testid="betslip-drawer"]',
+                    '[data-testid*="betslip"]',
+                    '[data-testid*="bet-slip"]',
+                    '[class*="betslip"]',
+                    '[class*="bet-slip"]',
+                    '[class*="drawer"]',
+                    '[data-testid="modal"]',
+                    '.modal',
+                    '[role="dialog"]'
+                ];
+
+                for (const selector of selectors) {
+                    const node = document.querySelector(selector);
+                    if (!node) continue;
+                    const rect = node.getBoundingClientRect();
+                    const text = (node.innerText || '').trim();
+                    if (rect.width > 220 && rect.height > 140 && text.length > 20) {
+                        return node;
+                    }
+                }
+                return null;
+            };
+
+            // Expand multi-leg slips before measuring
+            const btns = document.querySelectorAll('button');
+            for (const btn of btns) {
+                if (btn.innerText && btn.innerText.toLowerCase().includes('show more')) {
+                    btn.click();
+                    break;
+                }
+            }
+
+            // Wait until slip is ready and position-stable (up to 5s)
+            const start = Date.now();
+            let slip = null;
+            while (Date.now() - start < 5000) {
+                slip = findSlipContainer();
+                if (slip && isSlipReady(slip) && await rectIsStable(slip)) {
+                    break;
+                }
+                slip = null;
+                await new Promise(r => setTimeout(r, 120));
+            }
+
+            if (!slip) return null;
+
+            const rect = slip.getBoundingClientRect();
+            return {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height,
+                devicePixelRatio: window.devicePixelRatio
+            };
+        }
+    });
+
+    return modalRect[0]?.result || null;
+}
+
 async function processNextCapture() {
     if (isCapturing || captureQueue.length === 0) return;
 
@@ -166,64 +280,18 @@ async function processNextCapture() {
         // Initial wait for page bootstrap
         await new Promise(resolve => setTimeout(resolve, 3500));
 
-        // Try to expand "Show more" in the popup
+        // Find precise slip card dimensions
         try {
-            const modalRect = await chrome.scripting.executeScript({
-                target: { tabId: popupTabId },
-                func: async () => {
-                    // 1. Wait for actual bet content to appear (positive detection)
-                    const waitForContent = async (maxMs = 12000) => {
-                        const start = Date.now();
-                        while (Date.now() - start < maxMs) {
-                            // Look for positive signals: odds text, dollar amounts, or bet labels
-                            const modal = document.querySelector('[data-testid="modal"], .modal, [role="dialog"]');
-                            if (modal) {
-                                const text = modal.innerText || '';
-                                // We know it's loaded when we see numbers/odds inside the modal
-                                if (text.length > 100) return true;
-                            }
-                            await new Promise(r => setTimeout(r, 300));
-                        }
-                        return false; // timed out but proceed anyway
-                    };
-
-                    await waitForContent();
-
-                    // 2. Expand legs
-                    const btns = document.querySelectorAll('button');
-                    for (const btn of btns) {
-                        if (btn.innerText && btn.innerText.toLowerCase().includes('show more')) {
-                            btn.click();
-                            await new Promise(r => setTimeout(r, 800)); // Wait for expansion to render
-                            break;
-                        }
-                    }
-
-                    // 3. Find Modal and get dimensions
-                    const modal = document.querySelector('[data-testid="modal"], .modal, [role="dialog"]');
-                    if (modal) {
-                        const rect = modal.getBoundingClientRect();
-                        return {
-                            x: rect.x,
-                            y: rect.y,
-                            width: rect.width,
-                            height: rect.height,
-                            devicePixelRatio: window.devicePixelRatio
-                        };
-                    }
-                    return null;
-                }
-            });
-
-            const coords = modalRect[0]?.result;
+            const coords = await getModalCoords(popupTabId);
             if (coords) {
-                console.log('📐 Modal Coords found:', coords);
-                request.coords = coords; // Save for later cropping
+                console.log('📐 Modal coords:', coords);
+                request.coords = coords;
+            } else {
+                console.warn('⚠️ Modal coords unavailable, falling back to full-window screenshot');
             }
-
             await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (e) {
-            console.warn('Could not expand multi legs:', e.message);
+            console.warn('Could not determine modal bounds:', e.message);
         }
 
         // Capture screenshot from popup
