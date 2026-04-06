@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  receiver:
+    build: .
+    container_name: highroller_receiver
+    restart: unless-stopped
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./bets.db:/app/bets.db
+      - ./screenshots:/app/screenshots
+    environment:
+      - RECEIVER_TOKEN=${RECEIVER_TOKEN}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - TELEGRAM_VIP_TOKEN=${TELEGRAM_VIP_TOKEN}
+      - TELEGRAM_VIP_CHAT_ID=${TELEGRAM_VIP_CHAT_ID}
+
+  telegram-bot:
+    build: .
+    container_name: highroller_bot
+    restart: unless-stopped
+    volumes:
+      - ./bets.db:/app/bets.db
+    environment:
+      - TELEGRAM_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - UPPER_LEVEL_TOKEN=${TELEGRAM_VIP_TOKEN}
+      - UPPER_LEVEL_CHAT_ID=${TELEGRAM_VIP_CHAT_ID}
+      - RADIO_SERVER_URL=http://radio-server:5002
+    command: [ "python", "telegram_bot.py" ]
+    depends_on:
+      - radio-server
+
+  radio-server:
+    build: .
+    container_name: highroller_radio
+    restart: unless-stopped
+    ports:
+      - "5002:5002"
+    environment:
+      - PYTHONIOENCODING=utf-8
+    command: [ "python", "radio_server.py" ]

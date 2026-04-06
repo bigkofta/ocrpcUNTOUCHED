@@ -1,0 +1,239 @@
+# HighRoller OCR - Complete System Rules & Documentation
+
+## 🚨 CRITICAL INFO - READ FIRST
+
+### VPS Access
+- **Host:** `31.97.215.169`
+- **User:** `root`
+- **SSH:** `ssh root@31.97.215.169`
+- **Password:** See `.env` file (`sshPass`)
+
+### Live URLs
+- **Dashboard:** https://vengeful-mervin-uncoveting.ngrok-free.dev/view
+- **Bets endpoint:** https://vengeful-mervin-uncoveting.ngrok-free.dev/bets
+
+### Database Location
+- **VPS (LIVE):** `/root/highroller/bets.db` - This is the real database with all data
+- **Local (OLD):** `c:\Users\poo\highrollerocr-1\bets.db` - Old/test data only
+
+---
+
+## Architecture Overview
+
+```
+[Chrome Extension] ──HTTPS──▶ [Ngrok URL] ──tunnel──▶ [VPS Receiver] ──▶ [SQLite DB]
+      │                                                     │
+      │                                                     ▼
+      │                                              [Telegram Bot]
+      │                                                     │
+      ▼                                                     ▼
+ [Stake.com]                                          [Your Phone]
+```
+
+**Components:**
+- **Extension** (`chrome_extension/`) - Runs on stake.com, detects bets, captures screenshots
+- **Receiver** (`receiver.py`) - Flask API, saves to SQLite, **sends photos to Telegram** (server-side)
+- **Telegram Bot** (`telegram_bot.py`) - Polling bot for additional alerts
+- **Ngrok** - Tunnels public HTTPS to local port 5001
+
+> **Note (Jan 2026):** Photo sending moved from browser to server for 100% reliability.
+> Extension now captures and POSTs screenshots; receiver handles Telegram upload.
+
+---
+
+## Slip URL Capture - THE FIX (Dec 2025)
+
+### Problem
+Slip URLs were not being captured - extension clicked `td` which didn't trigger iid.
+
+### Solution (Hybrid Strategy - Jan 2026)
+**Robust Extraction & Popup Trigger**
+
+1.  **Robust Extraction:**
+    - Code must check for `iid=`, `iid%3D` (encoded), AND `sport:` prefixes.
+    - Strict `iid=` check causes failures.
+    - Check both `<a>` links and URL updates after click.
+
+2.  **Popup Window (Primary):**
+    - If URL is found, extension MUST open a **Popup Window** (`requestCaptureInPopup`).
+    - This is the user's preferred "Mini Window" behavior.
+
+3.  **Direct Capture (Fallback):**
+    - If URL cannot be found (or popup blocked), extension MUST fallback to **Direct Capture** of the current modal.
+    - Never fail silently.
+
+```javascript
+// ✅ CORRECT HYBRID LOGIC
+const links = tr.querySelectorAll("a[href]"); // Check links first
+// ... if not found ...
+const clickable = tr.querySelector("button") || tr.querySelector("td");
+clickable.click(); // Then click and wait
+// ... if URL found -> Popup ...
+// ... if NOT found -> Direct Capture Modal ...
+```
+
+### Cleanup After Capture
+Modal stays open after capture. Must clean up:
+1. `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`
+2. `history.back()` to restore URL
+
+### Metadata Mismatch Fix (Dec 21, 2025)
+**Problem:** Telegram text didn't match photo (e.g., "Multi (6) $320k" but photo shows "$2,400 Auxerre-Monaco")
+
+**Root cause:** Row shifts while processing → stale parsed data used for Telegram
+
+**Solution:** Extract event/stake/odds FROM THE MODAL before closing, use that for DB + Telegram
+
+```javascript
+// captureSlipFromRow now returns:
+{
+    slip_url: "...",
+    extractedData: { event, amount, odds, type }  // from modal!
+}
+```
+
+---
+
+## VPS Commands (Quick Reference)
+
+```bash
+# SSH in
+ssh root@31.97.215.169
+
+# Check containers running
+docker ps
+
+# View logs
+docker logs -f highroller_receiver
+docker logs -f highroller_bot
+
+# Restart services
+cd ~/highroller && docker-compose restart
+
+# Database queries
+sqlite3 /root/highroller/bets.db "SELECT COUNT(*) FROM bets;"
+sqlite3 /root/highroller/bets.db "SELECT * FROM bets ORDER BY id DESC LIMIT 5;"
+
+# Download database to local
+scp root@31.97.215.169:/root/highroller/bets.db ./vps_bets.db
+```
+
+---
+
+## Local Development Commands
+
+```powershell
+# Start local services (optional - VPS is primary)
+python receiver.py
+python telegram_bot.py
+
+# Check local database
+python db_health.py
+
+# Clear extension cache (in browser console on stake.com)
+localStorage.removeItem('hr_seen_v4'); location.reload();
+```
+
+---
+
+## Thresholds
+
+| Type | Photo Capture | DB Logging |
+|------|---------------|------------|
+| Multi | >= $1,000 | >= $500 |
+| Standard | >= $14,750 | >= $5,000 |
+
+---
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `chrome_extension/content.js` | Main detection/capture logic |
+| `chrome_extension/background.js` | Photo capture in popup → Telegram |
+| `receiver.py` | Flask API, saves to SQLite |
+| `telegram_bot.py` | Telegram alerts |
+| `database.py` | SQLite helpers |
+| `.env` | Secrets (ngrok token, SSH password) |
+
+---
+
+## System Resilience (Internet Drops)
+
+The user has unstable internet. The system acts as follows to minimize downtime:
+
+1.  **Auto-Retry:**
+    - Python services (`receiver.py`, `telegram_bot.py`) MUST run in infinite loops with `try/catch`.
+    - If internet drops, they will log error and RETRY (after sleep). They must NEVER crash.
+
+2.  **Recovery:**
+    - If services stop, user runs: `start_services.ps1` (Restarts everything locally).
+    - If Chrome Extension acts up, user: Reloads Extension & Refreshes Stake.
+
+3.  **Prohibited Actions:**
+    - **NEVER** use server-side screenshotting (Selenium/Playwright in Python). It gets blocked by Cloudflare and breaks the bot.
+    - **ALWAYS** use Client-Side (Extension) photo capture.
+
+---
+
+## Debugging Checklist
+
+1. **No bets detected?**
+   - Check you're on stake.com High Rollers page
+   - Check console for `HighRoller Content Script Injected!`
+   - Clear cache: `localStorage.removeItem('hr_seen_v4')`
+
+2. **Slip URLs not captured?**
+   - Verify `tr.querySelector("button")` returns element
+   - Check if button click triggers `?iid=` in URL
+   - Test manually in console (see below)
+
+3. **Not saving to database?**
+   - Check ngrok is running on VPS
+   - Dashboard loads: https://vengeful-mervin-uncoveting.ngrok-free.dev/view
+   - Check Docker containers: `docker ps`
+
+4. **No Telegram alerts?**
+   - Check `highroller_bot` container is running
+   - Check bot token in `receiver.py`
+
+---
+
+## Console Test (stake.com)
+
+```javascript
+// Test button click capture
+const rows = [...document.querySelectorAll('table tr')].filter(tr => tr.querySelectorAll('td').length >= 5);
+const btn = rows[0].querySelector('button');
+btn.click();
+setTimeout(() => {
+    const iid = new URL(location.href).searchParams.get('iid');
+    console.log('iid:', iid ? '✅ ' + iid : '❌ Not found');
+    history.back();
+}, 1000);
+```
+
+---
+
+## Rebuild From Scratch
+
+1. **VPS Setup:**
+   ```bash
+   ssh root@31.97.215.169
+   cd ~/highroller
+   docker-compose up -d --build
+   ```
+
+2. **Ngrok (on VPS):**
+   ```bash
+   ngrok http 5001 --authtoken YOUR_TOKEN
+   ```
+
+3. **Extension:**
+   - Update `RECEIVER_ENDPOINT` in `content.js` with new ngrok URL
+   - Load in Chrome: `chrome://extensions` → Load unpacked
+
+4. **Test:**
+   - Open stake.com High Rollers
+   - Check console for detection logs
+   - Check dashboard for incoming data

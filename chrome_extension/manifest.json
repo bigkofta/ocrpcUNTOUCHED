@@ -1,0 +1,30 @@
+{
+    "manifest_version": 3,
+    "name": "HighRoller Direct-Fire",
+    "version": "2.4",
+    "description": "Detect high-value bets, capture in popup, send to Telegram",
+    "permissions": [
+        "activeTab",
+        "tabs",
+        "storage",
+        "scripting"
+    ],
+    "host_permissions": [
+        "<all_urls>"
+    ],
+    "background": {
+        "service_worker": "background.js"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://stake.com/*",
+                "https://*.stake.com/*"
+            ],
+            "js": [
+                "content.js"
+            ],
+            "run_at": "document_end"
+        }
+    ]
+}

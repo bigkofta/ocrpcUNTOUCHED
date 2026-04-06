@@ -1,0 +1,89 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+config.env
+*.png
+*.jpg
+*.jpeg
+debug_*.png
+test_*.png
+current_screen.png
+enhanced_*.png
+visual_*.png
+simple_*.png
+click_*.png
+final_*.png
+working_*.png
+visible_*.png
+
+# Logs
+*.log
+
+# Temporary files
+temp/
+tmp/
+
+# Database
+*.db
+bets.db
+
+# Binary/Large files
+*.exe
+*.zip
+ngrok.exe
+ngrok.zip
+
+# Secrets (CRITICAL)
+.env
+.env.*
+config.env
+get_chat_id.py
+
+# Debug/Output files
+*.txt
+!requirements.txt
+debug_*.png
+
+# Screenshots (generated)
+screenshots/
+
+# Playwright data
+playwright_user_data/
+
+# Archive (old code with potential secrets)
+archive/

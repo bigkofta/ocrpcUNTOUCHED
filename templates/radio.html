@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Highroller Radio</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body {
+            background-color: #0a0e27;
+            color: #00d9ff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            overflow: hidden;
+        }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        p {
+            color: #888;
+            margin-bottom: 40px;
+            text-align: center;
+            max-width: 80%;
+        }
+        #connect-btn {
+            background: transparent;
+            border: 2px solid #00d9ff;
+            color: #00d9ff;
+            font-size: 1.5rem;
+            font-weight: bold;
+            padding: 20px 40px;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(0, 217, 255, 0.2);
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        #connect-btn:hover, #connect-btn:active {
+            background: #00d9ff;
+            color: #0a0e27;
+            box-shadow: 0 0 30px rgba(0, 217, 255, 0.6);
+        }
+        #status {
+            margin-top: 30px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            color: #f87171; /* Disconnected Red initially */
+        }
+        .connected {
+            color: #4ade80 !important; /* Connected Green */
+        }
+        /* Hidden audio element used for keeping iOS context alive if needed */
+        #dummy-audio {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <h1>📻 Live Scanner Radio</h1>
+    <p>Tap to connect. Leave this tab open and lock your phone to hear live dispatcher alerts.</p>
+    
+    <button id="connect-btn">Connect Radio</button>
+    <div id="status">Disconnected</div>
+
+    <!-- A silent looping track to ensure iOS gives us background audio privileges -->
+    <audio id="dummy-audio" loop playsinline>
+        <source src="data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU5LjE2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEluZm8AAAAPAAAAAQAAABQAAP//AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADw/AAAAAABIbmcAAAAAAAAA8P///wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" type="audio/mpeg">
+    </audio>
+
+    <script>
+        const connectBtn = document.getElementById('connect-btn');
+        const statusDiv = document.getElementById('status');
+        const dummyAudio = document.getElementById('dummy-audio');
+        
+        let socket;
+        let audioContext;
+        let isConnected = false;
+
+        function updateStatus(msg, isGood) {
+            statusDiv.innerText = msg;
+            if (isGood) {
+                statusDiv.classList.add('connected');
+                connectBtn.style.background = '#00d9ff';
+                connectBtn.style.color = '#0a0e27';
+                connectBtn.innerText = "Listening...";
+            } else {
+                statusDiv.classList.remove('connected');
+                connectBtn.style.background = 'transparent';
+                connectBtn.style.color = '#00d9ff';
+                connectBtn.innerText = "Connect Radio";
+            }
+        }
+
+        connectBtn.addEventListener('click', async () => {
+            if (isConnected) return; // Already connected
+
+            try {
+                // Initialize Web Audio API context user interaction
+                const AudioContext = window.AudioContext || window.webkitAudioContext;
+                audioContext = new AudioContext();
+                
+                // Play dummy track to lock-in iOS background audio capabilities
+                dummyAudio.play().catch(e => console.log("Could not auto-play dummy audio", e));
+
+                // Resume the actual AudioContext
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+
+                // Connect to the WebSocket stream
+                if (!socket) {
+                    socket = io(); // Connects to the same host/port automatically
+
+                    socket.on('connect', () => {
+                        isConnected = true;
+                        updateStatus("📡 Radio Active - Lock Screen Now", true);
+                        console.log("Connected to radio socket.");
+                    });
+
+                    socket.on('disconnect', () => {
+                        isConnected = false;
+                        updateStatus("Disconnected", false);
+                        console.log("Disconnected from radio socket.");
+                    });
+
+                    socket.on('audio_stream', async (msg) => {
+                        console.log("Received incoming radio transmission buffer!");
+                        if (!audioContext || audioContext.state === 'suspended') {
+                           console.log("AudioContext is suspended or null, skipping transmission.");
+                           return;
+                        }
+
+                        try {
+                            // The msg.data comes in as an ArrayBuffer from SocketIO
+                            const arrayBuffer = msg.data;
+                            
+                            // Decode the raw audio data (e.g. .wav or .ogg from the server)
+                            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                            
+                            // Create a buffer source perfectly timed and pitch controlled
+                            const source = audioContext.createBufferSource();
+                            source.buffer = audioBuffer;
+                            source.connect(audioContext.destination);
+                            
+                            // Fire the loud radio transmission
+                            source.start(0);
+                            
+                        } catch (err) {
+                            console.error('Error decoding/playing incoming radio stream:', err);
+                        }
+                    });
+                }
+            } catch (err) {
+                console.error("Failed to start radio context:", err);
+                alert("Failed to access audio capability. Ensure browser permits audio playback without un-muting.");
+            }
+        });
+    </script>
+</body>
+</html>
